@@ -14,7 +14,7 @@
 var BHN_SNAP_ENGINE = (function () {
   'use strict';
 
-  var ENGINE_VERSION = '2026.11.16-3';
+  var ENGINE_VERSION = '2026.11.16-4';
   var MIN_SHORTCUT_VERSION = 1;
 
   var UA = {
@@ -182,14 +182,33 @@ var BHN_SNAP_ENGINE = (function () {
   }
 
   /* ----------------------------- nhận diện link ----------------------------- */
+  // Link bài đăng (không phải trang chủ / tài nguyên tĩnh)
+  var POST_RE = /\/(video|videos|photo|reel|reels|p|tv|post|status|watch|shorts|live|share|story|stories|story\.php|permalink|item|comments|t|v|discovery|explore|note)\b|^https?:\/\/(vt\.|vm\.|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
+  var ASSET_RE = /\.(js|mjs|css|woff2?|ttf|otf|eot|ico|svg|json|map|webmanifest|xml)(\?|#|$)|static|\/obj\/|fonts\.|gstatic|googleapis|googletagmanager|doubleclick|cloudflare|jsdelivr|unpkg|schema\.org|w3\.org/i;
+  function isPostUrl(u) { return POST_RE.test(u); }
+  // Nội dung chia sẻ có thể là cả trang HTML (vd. chia sẻ từ trình duyệt trong Zalo) -> chọn link hợp lý nhất
   function extractUrl(text) {
-    var m = /https?:\/\/[^\s<>"'`]+/i.exec(text || '');
-    if (!m) {
-      var m2 = /(?:^|\s)((?:www\.|m\.|vt\.|vm\.|v\.)?[a-z0-9-]+\.(?:com|net|be|am|watch|it)\/[^\s<>"'`]+)/i.exec(text || '');
-      if (!m2) return '';
-      return 'https://' + m2[1].replace(/[),.;!?]+$/, '');
+    var t = String(text || '').replace(/\\u002[fF]/g, '/').replace(/\\\//g, '/');
+    var all = t.match(/https?:\/\/[^\s<>"'`\\]+/gi) || [];
+    if (!all.length) {
+      var m2 = /(?:^|\s)((?:www\.|m\.|vt\.|vm\.|v\.)?[a-z0-9-]+\.(?:com|net|be|am|watch|it)\/[^\s<>"'`]+)/i.exec(t);
+      return m2 ? 'https://' + m2[1].replace(/[),.;!?]+$/, '') : '';
     }
-    return m[0].replace(/[),.;!?。，、]+$/, '');
+    for (var i = 0; i < all.length; i++) all[i] = htmlUnescape(all[i]).replace(/[),.;!?。，、]+$/, '');
+    extractUrl.n = all.length;
+    if (all.length === 1) return all[0];
+    var best = null, cnt = {}, first = {};
+    var norm = function (u) { return u.split(/[?#]/)[0].replace(/\/+$/, '').toLowerCase(); };
+    for (i = 0; i < all.length; i++) { var k = norm(all[i]); cnt[k] = (cnt[k] || 0) + 1; if (!(k in first)) first[k] = i; }
+    for (i = 0; i < all.length; i++) {
+      var u = all[i], p = detect(u), sc;
+      if (p !== 'other' && p !== 'direct') sc = isPostUrl(u) && !ASSET_RE.test(u) ? 3 : 2;
+      else if (p === 'direct' && !ASSET_RE.test(u)) sc = 1;
+      else sc = ASSET_RE.test(u) ? 0 : 1;
+      var key = norm(u), c = cnt[key];
+      if (!best || sc > best.sc || (sc === best.sc && sc === 3 && c > best.c)) best = { u: u, sc: sc, c: c };
+    }
+    return best.u;
   }
   function detect(u) {
     var h = hostOf(u);
@@ -760,11 +779,10 @@ var BHN_SNAP_ENGINE = (function () {
       while ((mm = reC.exec(s))) { hc = /(?:content|href)="([^"]+)"/.exec(mm[0]); if (hc) strong.push(htmlUnescape(hc[1])); }
       var reA = /https?:(?:\\?\/){2}[^"'\s<>]+/g;
       while ((mm = reA.exec(s))) weak.push(htmlUnescape(mm[0].replace(/\\\//g, '/')));
-      var isPost = /\/(video|videos|reel|reels|p|tv|status|watch|shorts|share|story|stories|item|comments|t|v|discovery|explore|note)\b|^https?:\/\/(vt\.|vm\.|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
       var pick = function (list, needPost) {
         for (var ci = 0; ci < list.length; ci++) {
           var cu = list[ci].replace(/[),.;!?]+$/, ''), cp = detect(cu);
-          if (cp !== 'other' && cp !== 'direct' && cu !== st.src && (!needPost || isPost.test(cu))) return cu;
+          if (cp !== 'other' && cp !== 'direct' && cu !== st.src && (!needPost || isPostUrl(cu))) return cu;
         }
         return '';
       };
@@ -851,7 +869,7 @@ var BHN_SNAP_ENGINE = (function () {
   function failMessage(st) {
     var lines = ['Không tải được link ' + (PLATFORM_NAMES[st.plat] || '') + ' này.'];
     var su = String(st.src || ''); if (su.length > 70) su = su.slice(0, 67) + '…';
-    lines.push('Link: ' + su + (st.rr ? ' (từ ' + String(st.rr).slice(0, 40) + ')' : ''));
+    lines.push('Link: ' + su + (st.rr ? ' (từ ' + String(st.rr).slice(0, 40) + ')' : '') + (st.nu > 1 ? ' [chọn 1/' + st.nu + ' link được chia sẻ]' : ''));
     for (var i = 0; i < st.errs.length && i < 8; i++) lines.push('• ' + st.errs[i]);
     lines.push('Bài có thể riêng tư/đã xoá, hoặc API vừa đổi. Cập nhật engine.js rồi thử lại.');
     lines.push('Engine ' + ENGINE_VERSION);
@@ -911,7 +929,7 @@ var BHN_SNAP_ENGINE = (function () {
       var src = extractUrl(env.I);
       if (!src) return outError('Không tìm thấy link trong nội dung được chia sẻ / bộ nhớ tạm.');
       var plat = detect(src);
-      st = { v: 1, src: src, plat: plat, pi: 0, step: 0, d: {}, errs: [], mode: 'auto', phase: 'api', id: '' };
+      st = { v: 1, src: src, plat: plat, pi: 0, step: 0, d: {}, errs: [], mode: 'auto', phase: 'api', id: '', nu: extractUrl.n || 1 };
       if (isTrue(cfg.audio_only, false)) st.mode = 'audio';
       if (plat === 'direct') {
         var e = extOf(src, 'mp4');
