@@ -14,7 +14,7 @@
 var BHN_SNAP_ENGINE = (function () {
   'use strict';
 
-  var ENGINE_VERSION = '2026.11.16-5';
+  var ENGINE_VERSION = '2026.11.17-1';
   var MIN_SHORTCUT_VERSION = 1;
 
   var UA = {
@@ -189,7 +189,7 @@ var BHN_SNAP_ENGINE = (function () {
   // Tên miền chính của nền tảng (không phải máy chủ CDN/phụ như v16-webapp.tiktok.com)
   var MAIN_HOST_RE = /^((www|m|mobile|web|mbasic|vt|vm|v|old|new|music)\.)?[a-z0-9-]+\.[a-z]{2,}$/;
   // Link bài đăng có mã định danh rõ ràng -> ưu tiên cao nhất
-  var ID_POST_RE = /\/@[^\/?#]+\/(video|photo)\/\d{6,}|\/(reel|reels|p|tv)\/[\w-]{5,}|\/status(es)?\/\d{6,}|[?&]v=[\w-]{11}|\/(shorts|live)\/[\w-]{11}|\/(videos|reel)\/\d{6,}|story_fbid=|\/share\/[rvp]\/|\/(explore|discovery\/item)\/[0-9a-f]{16,}|\/comments\/[a-z0-9]{4,}|\/post\/[\w-]{6,}|^https?:\/\/(vt\.tiktok|vm\.tiktok|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
+  var ID_POST_RE = /\/@[^\/?#]+\/(video|photo)\/\d{6,}|\/(reel|reels|p|tv)\/[\w-]{5,}|\/status(es)?\/\d{6,}|youtube\.com\/(watch\?(.*&)?v=|shorts\/|live\/)[\w-]{11}|\/(videos|reel)\/\d{6,}|story_fbid=|\/share\/[rvp]\/|\/(explore|discovery\/item)\/[0-9a-f]{16,}|\/comments\/[a-z0-9]{4,}|\/post\/[\w-]{6,}|^https?:\/\/(vt\.tiktok|vm\.tiktok|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
   function urlScore(u) {
     var p = detect(u), asset = ASSET_RE.test(u);
     if (p !== 'other' && p !== 'direct' && MAIN_HOST_RE.test(hostOf(u)) && !asset) return ID_POST_RE.test(u) ? 4 : (isPostUrl(u) ? 3 : 2);
@@ -932,7 +932,7 @@ var BHN_SNAP_ENGINE = (function () {
     var resp = env.R ? env.d(env.R) : '';
     if (!st) {
       var src = extractUrl(env.I);
-      if (!src) return outError('Không tìm thấy link trong nội dung được chia sẻ / bộ nhớ tạm.');
+      if (!src) return outError('Chưa có link. Hãy sao chép link video / ảnh rồi chạy lại BHN Snap (hoặc dán link vào ô nhập).');
       var plat = detect(src);
       st = { v: 1, src: src, plat: plat, pi: 0, step: 0, d: {}, errs: [], mode: 'auto', phase: 'api', id: '', nu: extractUrl.n || 1 };
       if (isTrue(cfg.audio_only, false)) st.mode = 'audio';
