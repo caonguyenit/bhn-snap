@@ -14,7 +14,7 @@
 var BHN_SNAP_ENGINE = (function () {
   'use strict';
 
-  var ENGINE_VERSION = '2026.11.16-1';
+  var ENGINE_VERSION = '2026.11.16-2';
   var MIN_SHORTCUT_VERSION = 1;
 
   var UA = {
@@ -51,7 +51,9 @@ var BHN_SNAP_ENGINE = (function () {
       reddit: ['cobalt', 'redditjson'],
       other: ['cobalt', 'og']
     },
-    maxMenuItems: 30
+    maxMenuItems: 30,
+    // false = không dùng 'Khớp văn bản' của iOS, engine tự lọc trang bằng JavaScript
+    useGrep: false
   };
   /* ======================================================================= */
 
@@ -77,7 +79,35 @@ var BHN_SNAP_ENGINE = (function () {
   function parseJSON(s) {
     if (s === null || s === undefined) return null;
     if (typeof s === 'object') return s;
-    try { return JSON.parse(String(s)); } catch (e) { return null; }
+    try { return JSON.parse(String(s)); } catch (e) {}
+    if (/^\s*<\?xml[\s\S]*<plist/.test(String(s))) return parsePlistXML(String(s));
+    return null;
+  }
+  function parsePlistXML(s) {
+    try {
+      if (typeof DOMParser === 'undefined') return null;
+      var doc = new DOMParser().parseFromString(s, 'text/xml');
+      var root = doc.getElementsByTagName('plist')[0];
+      var conv = function (n) {
+        switch (n.tagName) {
+          case 'dict': var o = {}, c = n.children; for (var i = 0; i + 1 < c.length; i += 2) o[c[i].textContent] = conv(c[i + 1]); return o;
+          case 'array': return [].map.call(n.children, conv);
+          case 'integer': return parseInt(n.textContent, 10);
+          case 'real': return parseFloat(n.textContent);
+          case 'true': return true;
+          case 'false': return false;
+          default: return n.textContent;
+        }
+      };
+      return root && root.firstElementChild ? conv(root.firstElementChild) : null;
+    } catch (e) { return null; }
+  }
+  function snip(s) {
+    s = String(s === undefined || s === null ? '' : s);
+    return '[' + s.length + ' ký tự] ' + s.slice(0, 90).replace(/\s+/g, ' ');
+  }
+  function localGrep(s, g) {
+    try { return (String(s).match(new RegExp(g, 'g')) || []).join('\n'); } catch (e) { return String(s); }
   }
   function b64e(s) { return btoa(unescape(encodeURIComponent(s))); }
   function trim(s) { return String(s === undefined || s === null ? '' : s).replace(/^\s+|\s+$/g, ''); }
@@ -178,7 +208,7 @@ var BHN_SNAP_ENGINE = (function () {
     return uniq(list, function (x) { return x.api; });
   }
   function cobaltParse(j, st) {
-    if (!j || typeof j !== 'object') return { why: 'không phải JSON (có thể bị chặn/Cloudflare)' };
+    if (!j || typeof j !== 'object') return { why: 'không phải JSON ' + snip(st._resp) };
     var title = st.title || '';
     if (j.status === 'tunnel' || j.status === 'redirect') {
       var e = extOf(j.filename || j.url, st.mode === 'audio' ? 'mp3' : 'mp4');
@@ -278,7 +308,7 @@ var BHN_SNAP_ENGINE = (function () {
       return { req: { url: CONFIG.tikwm + '/api/?url=' + qenc(st.src) + '&hd=1', headers: { 'User-Agent': UA.chrome, 'Accept': 'application/json' } } };
     }
     var j = parseJSON(resp);
-    if (!j) return { fail: 'phản hồi không phải JSON' };
+    if (!j) return { fail: 'phản hồi không phải JSON ' + snip(resp) };
     if (j.code !== 0 || !j.data) return { fail: j.msg || ('code ' + j.code) };
     var d = j.data;
     st.id = d.id || st.id;
@@ -307,7 +337,9 @@ var BHN_SNAP_ENGINE = (function () {
     var list = cobaltList(cfg);
     if (st.step === 0) { st.d.k = 0; }
     else {
+      st._resp = resp;
       var r = cobaltParse(parseJSON(resp), st);
+      delete st._resp;
       if (r.res) return r;
       st.errs.push('cobalt[' + hostOf(list[st.d.k] && list[st.d.k].api) + ']: ' + r.why);
       st.d.k++;
@@ -340,7 +372,7 @@ var BHN_SNAP_ENGINE = (function () {
     var data = m && parseJSON(m[1]);
     var det = data && data.__DEFAULT_SCOPE__ && data.__DEFAULT_SCOPE__['webapp.video-detail'];
     var it = det && det.itemInfo && det.itemInfo.itemStruct;
-    if (!it) return { fail: (det && det.statusMsg) || 'không đọc được dữ liệu trang' };
+    if (!it) return { fail: (det && det.statusMsg) || ('không đọc được dữ liệu trang ' + snip(resp)) };
     st.id = it.id || st.id;
     var ref = { ref: 'https://www.tiktok.com/', ua: UA.chrome };
     var music = it.music && it.music.playUrl ? file(it.music.playUrl, 'audio', 'mp3', ref) : null;
@@ -420,7 +452,7 @@ var BHN_SNAP_ENGINE = (function () {
       return { req: { url: CONFIG.fxtwitter + '/2/status/' + id, headers: { 'User-Agent': UA.app, 'Accept': 'application/json' } } };
     }
     var j = parseJSON(resp);
-    if (!j) return { fail: 'phản hồi không phải JSON' };
+    if (!j) return { fail: 'phản hồi không phải JSON ' + snip(resp) };
     var s = j.status || j.tweet;
     if (!s) return { fail: j.message || ('code ' + j.code) };
     var media = s.media || (s.quote && s.quote.media) || {};
@@ -742,7 +774,8 @@ var BHN_SNAP_ENGINE = (function () {
     var lower = keys.map(function (x) { return x.toLowerCase(); });
     var filler = [['Accept-Language', 'en-US,en;q=0.9'], ['DNT', '1'], ['Sec-GPC', '1'], ['Cache-Control', 'no-cache'], ['Pragma', 'no-cache'],
       ['X-Bhn-Snap', '1'], ['X-Bhn-Snap-2', '1'], ['X-Bhn-Snap-3', '1']];
-    var out = { action: 'fetch', url: req.url, method: (req.method || 'GET').toUpperCase(), body: req.body || '', grep: req.grep || '', st: encState(st) };
+    st.g = CONFIG.useGrep ? '' : (req.grep || '');
+    var out = { action: 'fetch', url: req.url, method: (req.method || 'GET').toUpperCase(), body: req.body || '', grep: CONFIG.useGrep ? (req.grep || '') : '', st: encState(st) };
     var fi = 0;
     for (var i = 0; i < 8; i++) {
       var key, val;
@@ -807,6 +840,8 @@ var BHN_SNAP_ENGINE = (function () {
   }
 
   function drive(st, resp, cfg) {
+    if (resp && st.g) { resp = localGrep(resp, st.g); }
+    st.g = '';
     for (var guard = 0; guard < 40; guard++) {
       if (st.pi >= st.chain.length) return outError(failMessage(st));
       var name = st.chain[st.pi], p = P[name], r;
