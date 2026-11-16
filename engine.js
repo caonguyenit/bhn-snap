@@ -14,7 +14,7 @@
 var BHN_SNAP_ENGINE = (function () {
   'use strict';
 
-  var ENGINE_VERSION = '2026.11.16-2';
+  var ENGINE_VERSION = '2026.11.16-3';
   var MIN_SHORTCUT_VERSION = 1;
 
   var UA = {
@@ -29,8 +29,7 @@ var BHN_SNAP_ENGINE = (function () {
     // Danh sách cobalt API công khai, thử lần lượt. Có thể thêm {api, key}.
     // Instance của riêng bạn (nếu có) nhập trong cài đặt Phím tắt: cobalt_api / cobalt_key.
     cobalt: [
-      { api: 'https://cobalt-api.meowing.de', key: '' },
-      { api: 'https://cobalt-backend.canine.tools', key: '' },
+      // (16/11/2026: meowing.de, canine.tools, api.cobalt.tools, 3kh0 đã bắt buộc JWT/Turnstile -> bỏ)
       { api: 'https://cobaltapi.cjs.nz', key: '' }
     ],
     // true = mọi tệp đi qua tunnel của instance (ít tên miền -> ít hỏi quyền hơn)
@@ -739,7 +738,7 @@ var BHN_SNAP_ENGINE = (function () {
     if (st.step === 0) {
       st.step = 1;
       return { req: { url: st.src, headers: { 'User-Agent': UA.iphone, 'Accept': 'text/html' },
-        grep: '<meta[^>]+(?:property|name)="(?:og:video(?::secure_url|:url)?|og:image(?::secure_url)?|twitter:player:stream)"[^>]*>|<(?:video|source)[^>]+src="[^"]+"' } };
+        grep: '<meta[^>]+(?:property|name)="(?:og:video(?::secure_url|:url)?|og:image(?::secure_url)?|twitter:player:stream|og:url)"[^>]*>|<(?:video|source)[^>]+src="[^"]+"|<link[^>]+rel="canonical"[^>]*>|https?:(?:\\\\?/){2}[^"\'\\s<>]*(?:tiktok|douyin|instagram|facebook|fb\\.watch|youtu|twitter|x\\.com|threads|xiaohongshu|reddit)[^"\'\\s<>]*' } };
     }
     var s = String(resp || ''), vids = [], imgs = [], m;
     var re = /<meta[^>]+(?:property|name)="(og:video(?::secure_url|:url)?|og:image(?::secure_url)?|twitter:player:stream)"[^>]*>/g;
@@ -754,8 +753,26 @@ var BHN_SNAP_ENGINE = (function () {
     while ((m = re2.exec(s))) { var u2 = htmlUnescape(m[1]); if (/^https?:/.test(u2) && !/^blob:/.test(u2)) vids.push(file(u2, 'video', extOf(u2, 'mp4'))); }
     vids = uniq(vids, function (f) { return f.url; }).filter(function (f) { return !/\.m3u8|\.mpd/i.test(f.url); });
     imgs = uniq(imgs, function (f) { return f.url; });
+    // link rút gọn / trang trung gian -> tìm link gốc thuộc nền tảng đã biết rồi xử lý lại
+    if (!st.rr && st.plat === 'other') {
+      var strong = [], weak = [], mm, hc;
+      var reC = /<meta[^>]+property="og:url"[^>]*>|<link[^>]+rel="canonical"[^>]*>/g;
+      while ((mm = reC.exec(s))) { hc = /(?:content|href)="([^"]+)"/.exec(mm[0]); if (hc) strong.push(htmlUnescape(hc[1])); }
+      var reA = /https?:(?:\\?\/){2}[^"'\s<>]+/g;
+      while ((mm = reA.exec(s))) weak.push(htmlUnescape(mm[0].replace(/\\\//g, '/')));
+      var isPost = /\/(video|videos|reel|reels|p|tv|status|watch|shorts|share|story|stories|item|comments|t|v|discovery|explore|note)\b|^https?:\/\/(vt\.|vm\.|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
+      var pick = function (list, needPost) {
+        for (var ci = 0; ci < list.length; ci++) {
+          var cu = list[ci].replace(/[),.;!?]+$/, ''), cp = detect(cu);
+          if (cp !== 'other' && cp !== 'direct' && cu !== st.src && (!needPost || isPost.test(cu))) return cu;
+        }
+        return '';
+      };
+      var to = pick(strong, false) || (vids.length ? '' : pick(weak, true));
+      if (to) return { reroute: to };
+    }
     var files = vids.length ? vids : imgs.slice(0, 1);
-    if (!files.length) return { fail: 'trang không có video/ảnh công khai' };
+    if (!files.length) return { fail: 'trang không có video/ảnh công khai ' + (st._raw || '') };
     return { res: { title: '', opts: listOptions(files) } };
   };
 
@@ -833,6 +850,8 @@ var BHN_SNAP_ENGINE = (function () {
 
   function failMessage(st) {
     var lines = ['Không tải được link ' + (PLATFORM_NAMES[st.plat] || '') + ' này.'];
+    var su = String(st.src || ''); if (su.length > 70) su = su.slice(0, 67) + '…';
+    lines.push('Link: ' + su + (st.rr ? ' (từ ' + String(st.rr).slice(0, 40) + ')' : ''));
     for (var i = 0; i < st.errs.length && i < 8; i++) lines.push('• ' + st.errs[i]);
     lines.push('Bài có thể riêng tư/đã xoá, hoặc API vừa đổi. Cập nhật engine.js rồi thử lại.');
     lines.push('Engine ' + ENGINE_VERSION);
@@ -840,7 +859,8 @@ var BHN_SNAP_ENGINE = (function () {
   }
 
   function drive(st, resp, cfg) {
-    if (resp && st.g) { resp = localGrep(resp, st.g); }
+    st._raw = '';
+    if (resp && st.g) { st._raw = snip(resp); resp = localGrep(resp, st.g); }
     st.g = '';
     for (var guard = 0; guard < 40; guard++) {
       if (st.pi >= st.chain.length) return outError(failMessage(st));
@@ -851,6 +871,13 @@ var BHN_SNAP_ENGINE = (function () {
         catch (e) { r = { fail: 'lỗi xử lý: ' + (e && e.message ? e.message : e) }; }
       }
       if (r.req) return outFetch(st, r.req);
+      if (r.reroute) {
+        st.errs.push(name + ': chuyển sang ' + hostOf(r.reroute));
+        st.rr = st.src; st.src = r.reroute; st.plat = detect(r.reroute);
+        st.chain = (CONFIG.routes[st.plat] || CONFIG.routes.other).slice();
+        st.pi = 0; st.step = 0; st.d = {}; resp = null;
+        continue;
+      }
       if (r.res) {
         var o = present(st, r.res, cfg);
         if (o) return o;
