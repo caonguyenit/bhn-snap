@@ -14,7 +14,7 @@
 var BHN_SNAP_ENGINE = (function () {
   'use strict';
 
-  var ENGINE_VERSION = '2026.11.16-4';
+  var ENGINE_VERSION = '2026.11.16-5';
   var MIN_SHORTCUT_VERSION = 1;
 
   var UA = {
@@ -186,6 +186,15 @@ var BHN_SNAP_ENGINE = (function () {
   var POST_RE = /\/(video|videos|photo|reel|reels|p|tv|post|status|watch|shorts|live|share|story|stories|story\.php|permalink|item|comments|t|v|discovery|explore|note)\b|^https?:\/\/(vt\.|vm\.|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
   var ASSET_RE = /\.(js|mjs|css|woff2?|ttf|otf|eot|ico|svg|json|map|webmanifest|xml)(\?|#|$)|static|\/obj\/|fonts\.|gstatic|googleapis|googletagmanager|doubleclick|cloudflare|jsdelivr|unpkg|schema\.org|w3\.org/i;
   function isPostUrl(u) { return POST_RE.test(u); }
+  // Tên miền chính của nền tảng (không phải máy chủ CDN/phụ như v16-webapp.tiktok.com)
+  var MAIN_HOST_RE = /^((www|m|mobile|web|mbasic|vt|vm|v|old|new|music)\.)?[a-z0-9-]+\.[a-z]{2,}$/;
+  // Link bài đăng có mã định danh rõ ràng -> ưu tiên cao nhất
+  var ID_POST_RE = /\/@[^\/?#]+\/(video|photo)\/\d{6,}|\/(reel|reels|p|tv)\/[\w-]{5,}|\/status(es)?\/\d{6,}|[?&]v=[\w-]{11}|\/(shorts|live)\/[\w-]{11}|\/(videos|reel)\/\d{6,}|story_fbid=|\/share\/[rvp]\/|\/(explore|discovery\/item)\/[0-9a-f]{16,}|\/comments\/[a-z0-9]{4,}|\/post\/[\w-]{6,}|^https?:\/\/(vt\.tiktok|vm\.tiktok|v\.douyin|youtu\.be|fb\.watch|xhslink|redd\.it)/i;
+  function urlScore(u) {
+    var p = detect(u), asset = ASSET_RE.test(u);
+    if (p !== 'other' && p !== 'direct' && MAIN_HOST_RE.test(hostOf(u)) && !asset) return ID_POST_RE.test(u) ? 4 : (isPostUrl(u) ? 3 : 2);
+    return asset ? 0 : 1;
+  }
   // Nội dung chia sẻ có thể là cả trang HTML (vd. chia sẻ từ trình duyệt trong Zalo) -> chọn link hợp lý nhất
   function extractUrl(text) {
     var t = String(text || '').replace(/\\u002[fF]/g, '/').replace(/\\\//g, '/');
@@ -201,12 +210,8 @@ var BHN_SNAP_ENGINE = (function () {
     var norm = function (u) { return u.split(/[?#]/)[0].replace(/\/+$/, '').toLowerCase(); };
     for (i = 0; i < all.length; i++) { var k = norm(all[i]); cnt[k] = (cnt[k] || 0) + 1; if (!(k in first)) first[k] = i; }
     for (i = 0; i < all.length; i++) {
-      var u = all[i], p = detect(u), sc;
-      if (p !== 'other' && p !== 'direct') sc = isPostUrl(u) && !ASSET_RE.test(u) ? 3 : 2;
-      else if (p === 'direct' && !ASSET_RE.test(u)) sc = 1;
-      else sc = ASSET_RE.test(u) ? 0 : 1;
-      var key = norm(u), c = cnt[key];
-      if (!best || sc > best.sc || (sc === best.sc && sc === 3 && c > best.c)) best = { u: u, sc: sc, c: c };
+      var u = all[i], sc = urlScore(u), c = cnt[norm(u)];
+      if (!best || sc > best.sc || (sc === best.sc && sc >= 3 && c > best.c)) best = { u: u, sc: sc, c: c };
     }
     return best.u;
   }
@@ -782,7 +787,7 @@ var BHN_SNAP_ENGINE = (function () {
       var pick = function (list, needPost) {
         for (var ci = 0; ci < list.length; ci++) {
           var cu = list[ci].replace(/[),.;!?]+$/, ''), cp = detect(cu);
-          if (cp !== 'other' && cp !== 'direct' && cu !== st.src && (!needPost || isPostUrl(cu))) return cu;
+          if (cp !== 'other' && cp !== 'direct' && cu !== st.src && MAIN_HOST_RE.test(hostOf(cu)) && (!needPost || urlScore(cu) >= 3)) return cu;
         }
         return '';
       };
